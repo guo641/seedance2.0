@@ -19,10 +19,12 @@ export async function setKeySession(apiKey: string, baseUrl?: string) {
     .setIssuedAt()
     .setExpirationTime(`${MAX_AGE}s`)
     .sign(SECRET);
+  // 桌面版跑在 http://127.0.0.1:随机端口:secure:true + sameSite:none 在 http 下易被丢弃,
+  // 导致重启后会话丢失、又要重输秘钥。应用始终同源,用 lax + 非 secure 最稳,能可靠持久化 30 天。
   (await cookies()).set(COOKIE, token, {
     httpOnly: true,
-    secure: true,
-    sameSite: 'none',
+    secure: false,
+    sameSite: 'lax',
     path: '/',
     maxAge: MAX_AGE,
   });

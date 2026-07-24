@@ -78,7 +78,9 @@ async function createWindow() {
 
   try {
     const base = await startServer();
-    await win.loadURL(base + '/login');
+    // 载入首页:middleware 会在有有效会话(Cookie)时放行,无会话才跳 /login。
+    // 这样重启后只要会话没过期就直接进,不用每次重输秘钥。
+    await win.loadURL(base + '/');
   } catch (e) {
     dialog.showErrorBox('启动失败', String(e?.message || e));
   }

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { postJSON } from '@/lib/client';
+import { api, postJSON } from '@/lib/client';
 
 const KEY_STORE = 'seedance:secret'; // 记住用户秘钥(本机,供下次自动登录)
 
@@ -8,22 +8,32 @@ export default function KeyGatePage() {
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [autoLogging, setAutoLogging] = useState(false); // 正在用已保存秘钥自动登录
+  const [autoLogging, setAutoLogging] = useState(true); // 进页先尝试自动登录,默认 true 避免闪现表单
 
-  // 第二次及以后打开:若本机记住了秘钥,自动验证并进入,无需再手输
+  // 打开时:①若已有有效会话(Cookie)直接进;②否则若本机记住了秘钥,自动验证并进入
   useEffect(() => {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem(KEY_STORE) : null;
-    if (!saved) return;
-    setSecret(saved);
-    setAutoLogging(true);
     (async () => {
+      // ① 已登录过且会话仍有效(Cookie 与端口无关、可跨重启持久化)→ 直接进
+      try {
+        const me = await api('/api/auth/me');
+        if (me?.connected) {
+          window.location.href = '/';
+          return;
+        }
+      } catch {}
+      // ② 用本机记住的秘钥自动验证
+      const saved = typeof window !== 'undefined' ? localStorage.getItem(KEY_STORE) : null;
+      if (!saved) {
+        setAutoLogging(false);
+        return;
+      }
+      setSecret(saved);
       try {
         const r = await postJSON('/api/auth', { key: saved.trim() });
         if (r.success) {
           window.location.href = '/';
           return;
         }
-        // 保存的秘钥已失效 → 清掉,回到手动输入
         localStorage.removeItem(KEY_STORE);
         setErr('已保存的秘钥已失效,请重新输入');
       } catch {

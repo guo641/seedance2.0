@@ -88,9 +88,15 @@ export default function Home() {
     try {
       localStorage.setItem(LR_KEY, JSON.stringify({ storyboard, model: r.model, seg: r.seg, mode: r.mode }));
     } catch {}
-    // 生成标题/摘要 + 存历史库属于「锦上添花」,失败不该盖掉已经拿到的分镜结果
+    // 标题/摘要是「锦上添花」——单独 try,失败也不能挡住下面的历史保存
+    let meta: any = null;
     try {
-      const meta = await postJSON('/api/generate-story-meta', { storyboard, model: r.model });
+      meta = await postJSON('/api/generate-story-meta', { storyboard, model: r.model });
+    } catch (e) {
+      console.warn('生成标题/摘要失败(不影响保存):', e);
+    }
+    // 无论标题生成成功与否,都要把这次分镜存进历史库
+    try {
       const saved = await postJSON('/api/analysis-history', {
         storyboard,
         mode: r.mode,
@@ -103,8 +109,9 @@ export default function Home() {
         summary: meta?.data?.summary,
       });
       if (saved.success) setSavedId(saved.data.id);
+      else console.warn('保存历史失败:', saved?.error);
     } catch (e) {
-      console.warn('保存历史失败(不影响结果展示):', e);
+      console.warn('保存历史异常:', e);
     }
   }
 
