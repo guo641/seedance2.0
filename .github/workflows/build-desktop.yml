@@ -1,0 +1,33 @@
+name: 打包 Windows 客户端
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 打包 exe
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: Seedance2.0反推-Windows安装包
+          path: dist-desktop/*.exe
+          if-no-files-found: error
