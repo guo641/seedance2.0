@@ -5,6 +5,9 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -20,8 +23,8 @@ jobs:
       - name: 安装依赖
         run: npm install
 
-      - name: 打包 exe
-        run: npm run dist
+      - name: 打包 exe 并发布到 Releases
+        run: npm run dist:publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
