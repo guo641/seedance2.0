@@ -49,7 +49,21 @@ export async function chat(opts: {
       { role: 'user', content: userContent },
     ],
   });
-  return res.choices[0]?.message?.content?.trim() || '';
+  const choice = res.choices?.[0];
+  const content = choice?.message?.content?.trim() || '';
+  if (!content) {
+    // 空正文一定是失败(常见:内容安全过滤 / 推理占满额度截断)。给出可操作的报错,
+    // 而不是把空字符串当成功往下传,导致「反推成功却是空白结果」。
+    const fr = choice?.finish_reason;
+    if (fr === 'content_filter')
+      throw new Error(
+        '该模型触发了内容安全过滤(文案含暴力/死亡等敏感情节),未能输出。建议换用 gemini-2.5-pro 或 gpt-5.5 重试,或调整文案措辞后再试。',
+      );
+    if (fr === 'length')
+      throw new Error('模型输出被长度限制截断且未产出正文(思考占满了额度)。请减少分段数量或更换反推模型后重试。');
+    throw new Error(`模型返回了空内容(finish_reason=${fr || 'unknown'})。请重试或更换反推模型。`);
+  }
+  return content;
 }
 
 /**

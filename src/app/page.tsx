@@ -62,6 +62,80 @@ export default function Home() {
 
   const canUse = !!me; // BYOK:连接了 key 即可用
 
+  // 后台反推任务是「触发即分离」的:即使切走页面(整页刷新),服务端仍在跑。
+  // 这里把进行中的 taskId 存到 localStorage,回到本页时自动重新接上,不再「切走就丢」。
+  type Running = {
+    taskId: string;
+    startedAt: number;
+    mode: Mode;
+    model: string;
+    seg: number;
+    sourceUrl?: string;
+    videoUrl?: string;
+  };
+  const LS_KEY = 'seedance:running:analyze';
+
+  // 轮询某个后台反推任务直到完成,并做结果展示 + 存历史(新反推与「恢复」共用)
+  async function finishAnalyze(r: Running) {
+    const done = await pollTask((id) => `/api/trigger-analyze/status?taskId=${id}`, r.taskId, {
+      onTick: (x) => x.progress && setProgress(x.progress),
+    });
+    const storyboard = done.result || done.storyboard;
+    if (!storyboard || !storyboard.trim()) throw new Error('反推结果为空,请重试或更换反推模型');
+    setResult(storyboard);
+    // 生成标题/摘要 + 存历史库属于「锦上添花」,失败不该盖掉已经拿到的分镜结果
+    try {
+      const meta = await postJSON('/api/generate-story-meta', { storyboard, model: r.model });
+      const saved = await postJSON('/api/analysis-history', {
+        storyboard,
+        mode: r.mode,
+        model: r.model,
+        sourceUrl: r.sourceUrl,
+        videoUrl: r.videoUrl,
+        segmentSeconds: r.seg,
+        title: meta?.data?.title,
+        tags: meta?.data?.tags,
+        summary: meta?.data?.summary,
+      });
+      if (saved.success) setSavedId(saved.data.id);
+    } catch (e) {
+      console.warn('保存历史失败(不影响结果展示):', e);
+    }
+  }
+
+  // 进本页时:若有未完成的后台反推,自动接上继续
+  useEffect(() => {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(LS_KEY) : null;
+    if (!raw) return;
+    let r: Running | null = null;
+    try {
+      r = JSON.parse(raw);
+    } catch {
+      localStorage.removeItem(LS_KEY);
+      return;
+    }
+    if (!r?.taskId || Date.now() - (r.startedAt || 0) > 25 * 60 * 1000) {
+      localStorage.removeItem(LS_KEY);
+      return;
+    }
+    startRef.current = r.startedAt || Date.now();
+    setBusy(true);
+    setProgress('继续上次反推…');
+    (async () => {
+      try {
+        await finishAnalyze(r!);
+      } catch (e: any) {
+        setErr(e?.message || '任务失败');
+      } finally {
+        setFinalTime(Math.floor((Date.now() - startRef.current) / 1000));
+        setBusy(false);
+        setProgress('');
+        localStorage.removeItem(LS_KEY);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function run() {
     setErr('');
     setResult('');
@@ -84,23 +158,16 @@ export default function Home() {
           style: style === '__custom__' ? customStyle.trim() : style,
         });
         if (!trig.success) throw new Error(trig.error || '触发失败');
-        const done = await pollTask((id) => `/api/trigger-analyze/status?taskId=${id}`, trig.taskId, {
-          onTick: (x) => x.progress && setProgress(x.progress),
-        });
-        const storyboard = done.result || done.storyboard;
-        setResult(storyboard);
-        const meta = await postJSON('/api/generate-story-meta', { storyboard, model });
-        const saved = await postJSON('/api/analysis-history', {
-          storyboard,
+        const r: Running = {
+          taskId: trig.taskId,
+          startedAt: startRef.current,
           mode: 'commentary',
           model,
+          seg,
           sourceUrl: '电影解说文案',
-          segmentSeconds: seg,
-          title: meta?.data?.title,
-          tags: meta?.data?.tags,
-          summary: meta?.data?.summary,
-        });
-        if (saved.success) setSavedId(saved.data.id);
+        };
+        localStorage.setItem(LS_KEY, JSON.stringify(r));
+        await finishAnalyze(r);
         return;
       }
 
@@ -145,32 +212,25 @@ export default function Home() {
         style: style === '__custom__' ? customStyle.trim() : style,
       });
       if (!trig.success) throw new Error(trig.error || '触发分镜任务失败');
-      const done = await pollTask((id) => `/api/trigger-analyze/status?taskId=${id}`, trig.taskId, {
-        onTick: (x) => x.progress && setProgress(x.progress),
-      });
-      const storyboard = done.result || done.storyboard;
-      setResult(storyboard);
-
-      // 4) 自动存历史库
-      const meta = await postJSON('/api/generate-story-meta', { storyboard, model });
-      const saved = await postJSON('/api/analysis-history', {
-        storyboard,
+      const r: Running = {
+        taskId: trig.taskId,
+        startedAt: startRef.current,
         mode,
         model,
+        seg,
         sourceUrl: mode === 'douyin' ? douyin : file?.name,
         videoUrl,
-        segmentSeconds: seg,
-        title: meta?.data?.title,
-        tags: meta?.data?.tags,
-        summary: meta?.data?.summary,
-      });
-      if (saved.success) setSavedId(saved.data.id);
+      };
+      localStorage.setItem(LS_KEY, JSON.stringify(r));
+      // 4) 轮询到完成并自动存历史库(与「恢复」共用同一逻辑)
+      await finishAnalyze(r);
     } catch (e: any) {
       setErr(e?.message || '分析失败');
     } finally {
       setFinalTime(Math.floor((Date.now() - startRef.current) / 1000));
       setBusy(false);
       setProgress('');
+      if (typeof window !== 'undefined') localStorage.removeItem(LS_KEY);
     }
   }
 

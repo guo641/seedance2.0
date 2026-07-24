@@ -2,7 +2,14 @@
 
 export async function api<T = any>(url: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'include', ...opts });
-  return res.json();
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // 服务器返回了非 JSON(通常是 HTML 错误页):给出可读的报错,而不是 "Unexpected token '<'"
+    const snippet = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`服务器返回异常(HTTP ${res.status})${snippet ? ':' + snippet : ',请稍后重试'}`);
+  }
 }
 
 export async function postJSON<T = any>(url: string, body: any): Promise<T> {

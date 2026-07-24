@@ -1,17 +1,44 @@
-import ffmpegPath from 'ffmpeg-static';
-import ffprobeStatic from 'ffprobe-static';
-import ffmpeg from 'fluent-ffmpeg';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
 
-if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
-if (ffprobeStatic?.path) ffmpeg.setFfprobePath(ffprobeStatic.path);
+/**
+ * 延迟加载 ffmpeg 相关原生依赖。
+ * 关键:不要在模块顶层 import ffmpeg-static / ffprobe-static / fluent-ffmpeg。
+ * 否则在打包版(standalone / Electron 桌面)里,一旦这些包的某个二进制/子依赖
+ * 没被正确打进产物,整个 video 模块在 import 时就会崩溃,连带 pipeline、
+ * /api/trigger-analyze-url 路由一起加载失败,Next 会返回 HTML 500 —— 前端表现为
+ * 神秘的 "Unexpected token '<', "<!DOCTYPE ... is not valid JSON"。
+ * 改为「用到时才 require」,纯文本(电影解说文案)反推等不碰视频的功能就完全不依赖 ffmpeg。
+ */
+let _ff: any = null;
+function getFfmpeg(): any {
+  if (_ff) return _ff;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const ffmpeg = require('fluent-ffmpeg');
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ffmpegPath = require('ffmpeg-static');
+    if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+  } catch (e) {
+    console.warn('[video] ffmpeg-static 不可用:', (e as Error)?.message);
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ffprobeStatic = require('ffprobe-static');
+    if (ffprobeStatic?.path) ffmpeg.setFfprobePath(ffprobeStatic.path);
+  } catch (e) {
+    console.warn('[video] ffprobe-static 不可用:', (e as Error)?.message);
+  }
+  _ff = ffmpeg;
+  return ffmpeg;
+}
 
 export function probeDuration(input: string): Promise<number> {
+  const ffmpeg = getFfmpeg();
   return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(input, (err, data) => {
+    ffmpeg.ffprobe(input, (err: any, data: any) => {
       if (err) return reject(err);
       resolve(data.format?.duration || 0);
     });
@@ -31,6 +58,7 @@ export async function extractAtTimestamps(input: string, times: number[]): Promi
     (a, b) => a - b,
   );
   if (!uniq.length) return [];
+  const ffmpeg = getFfmpeg();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'frames-'));
   await new Promise<void>((resolve, reject) => {
     ffmpeg(input)
@@ -75,6 +103,7 @@ export function adaptiveFrameCount(durationSec: number): number {
 /** 抽取音轨为 mp3(供 ASR) */
 export async function extractAudio(input: string): Promise<string> {
   const out = path.join(os.tmpdir(), `audio-${nanoid(8)}.mp3`);
+  const ffmpeg = getFfmpeg();
   await new Promise<void>((resolve, reject) => {
     ffmpeg(input)
       .noVideo()
