@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, dialog, shell, Menu } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -84,18 +84,117 @@ async function createWindow() {
   }
 }
 
+// ── C 层:整包自动更新(electron-updater + GitHub Releases)──
+let manualCheck = false; // 区分「开机静默检查」与「用户手动点检查更新」
+function setupAutoUpdate() {
+  if (!app.isPackaged) return; // 只有安装版才有自动更新
+  let updater;
+  try {
+    updater = require('electron-updater').autoUpdater;
+  } catch {
+    return;
+  }
+  updater.autoDownload = true; // 发现新版就后台下
+  updater.autoInstallOnAppQuit = true; // 用户没点重启也会在下次退出时装上
+
+  updater.on('update-available', (info) => {
+    if (win)
+      dialog.showMessageBox(win, {
+        type: 'info',
+        title: '发现新版本',
+        message: `发现新版本 v${info.version}，正在后台自动下载…`,
+        detail: '下载完成后会提示你一键重启安装,期间可以继续使用。',
+        buttons: ['好的'],
+      });
+  });
+  updater.on('update-not-available', () => {
+    if (manualCheck && win)
+      dialog.showMessageBox(win, { type: 'info', title: '检查更新', message: '当前已是最新版本。', buttons: ['好的'] });
+    manualCheck = false;
+  });
+  updater.on('error', (err) => {
+    if (manualCheck && win)
+      dialog.showMessageBox(win, {
+        type: 'error',
+        title: '检查更新失败',
+        message: '检查更新时出错,请稍后再试。',
+        detail: String(err?.message || err),
+        buttons: ['好的'],
+      });
+    manualCheck = false;
+  });
+  updater.on('update-downloaded', (info) => {
+    if (!win) return;
+    dialog
+      .showMessageBox(win, {
+        type: 'question',
+        title: '更新已就绪',
+        message: `新版本 v${info.version} 已下载完成`,
+        detail: '点「立即重启」马上更新,或选「稍后」——下次退出软件时会自动安装。',
+        buttons: ['立即重启', '稍后'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then(({ response }) => {
+        if (response === 0) updater.quitAndInstall();
+      });
+  });
+
+  global.__checkForUpdates = (fromUser) => {
+    manualCheck = !!fromUser;
+    updater.checkForUpdates().catch((e) => {
+      manualCheck = false;
+      console.warn('[updater]', e?.message);
+    });
+  };
+
+  // 开机静默检查一次
+  global.__checkForUpdates(false);
+}
+
+// 顶部菜单:含「检查更新」
+function buildMenu() {
+  const template = [
+    { label: '文件', submenu: [{ role: 'quit', label: '退出' }] },
+    {
+      label: '帮助',
+      submenu: [
+        {
+          label: '检查更新…',
+          click: () => {
+            if (global.__checkForUpdates) global.__checkForUpdates(true);
+            else if (win)
+              dialog.showMessageBox(win, { type: 'info', message: '开发调试版不支持自动更新,安装版才可用。', buttons: ['好的'] });
+          },
+        },
+        { label: '刷新页面', click: () => win && win.reload() },
+        { type: 'separator' },
+        {
+          label: '关于',
+          click: () =>
+            win &&
+            dialog.showMessageBox(win, {
+              type: 'info',
+              title: '关于',
+              message: `Seedance 2.0 反推  v${app.getVersion()}`,
+              detail: '作者:天辰   微信:ChatGPT02468',
+              buttons: ['好的'],
+            }),
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(async () => {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  buildMenu();
   // B 层:后台检查并下载 JS 热更新(下次启动生效),失败不阻塞
   checkHotUpdate(HOT_DIR, RES_APP).catch((e) => console.warn('[hotupdate]', e?.message));
-  // C 层:整包自动更新(electron-updater),仅打包后启用
-  if (app.isPackaged) {
-    try {
-      const { autoUpdater } = require('electron-updater');
-      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    } catch {}
-  }
   await createWindow();
+  // C 层:窗口就绪后再挂自动更新(弹窗需要 win)
+  setupAutoUpdate();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

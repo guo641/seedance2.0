@@ -1,21 +1,49 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { postJSON } from '@/lib/client';
+
+const KEY_STORE = 'seedance:secret'; // 记住用户秘钥(本机,供下次自动登录)
 
 export default function KeyGatePage() {
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [autoLogging, setAutoLogging] = useState(false); // 正在用已保存秘钥自动登录
+
+  // 第二次及以后打开:若本机记住了秘钥,自动验证并进入,无需再手输
+  useEffect(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem(KEY_STORE) : null;
+    if (!saved) return;
+    setSecret(saved);
+    setAutoLogging(true);
+    (async () => {
+      try {
+        const r = await postJSON('/api/auth', { key: saved.trim() });
+        if (r.success) {
+          window.location.href = '/';
+          return;
+        }
+        // 保存的秘钥已失效 → 清掉,回到手动输入
+        localStorage.removeItem(KEY_STORE);
+        setErr('已保存的秘钥已失效,请重新输入');
+      } catch {
+        setErr('自动登录失败,请手动验证');
+      } finally {
+        setAutoLogging(false);
+      }
+    })();
+  }, []);
 
   async function verify() {
     setErr('');
-    if (!secret.trim()) return setErr('请输入你的秘钥');
+    const k = secret.trim();
+    if (!k) return setErr('请输入你的秘钥');
     setBusy(true);
     try {
-      // 用秘钥连接中转做有效性验证(中转地址用默认,前台隐藏)
-      const r = await postJSON('/api/auth', { key: secret.trim() });
+      const r = await postJSON('/api/auth', { key: k });
       if (!r.success) return setErr(r.message || '秘钥无效,请检查后重试');
-      window.location.href = '/'; // 有效 → 直接进入工作界面
+      localStorage.setItem(KEY_STORE, k); // 记住,下次自动登录
+      window.location.href = '/';
     } catch {
       setErr('网络错误,请重试');
     } finally {
@@ -32,7 +60,9 @@ export default function KeyGatePage() {
             S
           </span>
           <h1 className="text-3xl font-extrabold tracking-tight text-gray-100">Seedance 2.0 反推</h1>
-          <p className="text-sm text-gray-500 mt-2">请输入你的秘钥,验证有效后进入系统</p>
+          <p className="text-sm text-gray-500 mt-2">
+            {autoLogging ? '正在用已保存的秘钥自动登录…' : '请输入你的秘钥,验证有效后进入系统'}
+          </p>
         </div>
 
         <div className="space-y-3 text-left">
@@ -43,14 +73,15 @@ export default function KeyGatePage() {
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && verify()}
+            disabled={autoLogging}
             autoFocus
           />
           {err && <p className="text-sm text-red-400 text-center">{err}</p>}
-          <button className="btn-primary w-full" onClick={verify} disabled={busy}>
-            {busy ? '验证秘钥中...' : '验证秘钥并进入'}
+          <button className="btn-primary w-full" onClick={verify} disabled={busy || autoLogging}>
+            {autoLogging ? '自动登录中…' : busy ? '验证秘钥中...' : '验证秘钥并进入'}
           </button>
           <p className="text-xs text-gray-600 text-center">
-            秘钥仅保存在你浏览器的加密 Cookie 里,用于调用你自己的额度,服务器不存储。
+            秘钥仅保存在你本机(用于自动登录和调用你自己的额度),服务器不存储。点右上角「退出」可清除记住的秘钥。
           </p>
         </div>
       </div>

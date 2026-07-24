@@ -54,7 +54,7 @@ export default function Home() {
     api('/api/models').then((r) => {
       if (r.success) {
         setModels(r.data.models);
-        setModel(r.data.default);
+        setModel((m) => m || r.data.default); // 不覆盖已从上次结果恢复的模型选择
         setStyles(r.data.styles || []);
       }
     });
@@ -73,7 +73,8 @@ export default function Home() {
     sourceUrl?: string;
     videoUrl?: string;
   };
-  const LS_KEY = 'seedance:running:analyze';
+  const LS_KEY = 'seedance:running:analyze'; // 进行中的任务
+  const LR_KEY = 'seedance:lastresult'; // 上一次完成的结果(切走再回来仍保留,直到重新推理)
 
   // 轮询某个后台反推任务直到完成,并做结果展示 + 存历史(新反推与「恢复」共用)
   async function finishAnalyze(r: Running) {
@@ -83,6 +84,10 @@ export default function Home() {
     const storyboard = done.result || done.storyboard;
     if (!storyboard || !storyboard.trim()) throw new Error('反推结果为空,请重试或更换反推模型');
     setResult(storyboard);
+    // 记住这次结果:切到别的功能再回来仍然在,直到下次重新推理才被替换
+    try {
+      localStorage.setItem(LR_KEY, JSON.stringify({ storyboard, model: r.model, seg: r.seg, mode: r.mode }));
+    } catch {}
     // 生成标题/摘要 + 存历史库属于「锦上添花」,失败不该盖掉已经拿到的分镜结果
     try {
       const meta = await postJSON('/api/generate-story-meta', { storyboard, model: r.model });
@@ -103,19 +108,32 @@ export default function Home() {
     }
   }
 
-  // 进本页时:若有未完成的后台反推,自动接上继续
+  // 进本页时:①若有未完成的后台反推,自动接上继续;②否则恢复上一次完成的结果
   useEffect(() => {
     const raw = typeof window !== 'undefined' ? localStorage.getItem(LS_KEY) : null;
-    if (!raw) return;
     let r: Running | null = null;
-    try {
-      r = JSON.parse(raw);
-    } catch {
-      localStorage.removeItem(LS_KEY);
-      return;
+    if (raw) {
+      try {
+        r = JSON.parse(raw);
+      } catch {
+        localStorage.removeItem(LS_KEY);
+      }
     }
+    // 没有进行中的任务 → 尝试恢复上一次的结果,让它在切页后依然显示
     if (!r?.taskId || Date.now() - (r.startedAt || 0) > 25 * 60 * 1000) {
-      localStorage.removeItem(LS_KEY);
+      if (raw) localStorage.removeItem(LS_KEY);
+      try {
+        const last = localStorage.getItem(LR_KEY);
+        if (last) {
+          const lr = JSON.parse(last);
+          if (lr?.storyboard) {
+            setResult(lr.storyboard);
+            if (lr.model) setModel(lr.model);
+            if (lr.seg) setSeg(lr.seg);
+            if (lr.mode) setMode(lr.mode);
+          }
+        }
+      } catch {}
       return;
     }
     startRef.current = r.startedAt || Date.now();
@@ -141,6 +159,7 @@ export default function Home() {
     setResult('');
     setSavedId(null);
     setFinalTime(null);
+    if (typeof window !== 'undefined') localStorage.removeItem(LR_KEY); // 开始新推理才清掉旧结果
     if (!me) return setErr('请先输入你的秘钥');
     startRef.current = Date.now();
     setElapsed(0);

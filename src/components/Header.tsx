@@ -58,6 +58,10 @@ export default function Header({ me, tab }: { me: Me; quota?: any; tab?: string 
                 className="btn-ghost py-1"
                 onClick={async () => {
                   await postJSON('/api/auth/logout', {});
+                  // 退出时清除本机记住的秘钥,否则会立刻又自动登录
+                  try {
+                    localStorage.removeItem('seedance:secret');
+                  } catch {}
                   location.href = '/login';
                 }}
               >
