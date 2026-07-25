@@ -1,6 +1,6 @@
 {
   "name": "seedance-reverse",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -35,6 +35,7 @@
     "productName": "Seedance2.0反推",
     "asar": true,
     "asarUnpack": ["**/*.node"],
+    "afterPack": "scripts/afterPack.js",
     "files": ["electron/**/*"],
     "extraResources": [{ "from": ".next/standalone", "to": "app" }],
     "npmRebuild": true,
@@ -46,6 +47,7 @@
   "devDependencies": {
     "electron": "33.2.1",
     "electron-builder": "25.1.8",
+    "@electron/rebuild": "^3.6.0",
     "@types/node": "22.10.7",
     "@types/react": "19.0.7",
     "@types/react-dom": "19.0.3",

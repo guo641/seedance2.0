@@ -28,6 +28,7 @@ export default function Home() {
   const [result, setResult] = useState('');
   const [err, setErr] = useState('');
   const [savedId, setSavedId] = useState<number | null>(null);
+  const [saveErr, setSaveErr] = useState(''); // 存历史库失败时的原因(便于排查桌面端问题)
   const [elapsed, setElapsed] = useState(0); // 实时秒
   const [finalTime, setFinalTime] = useState<number | null>(null); // 完成耗时
   const startRef = useRef(0);
@@ -108,10 +109,14 @@ export default function Home() {
         tags: meta?.data?.tags,
         summary: meta?.data?.summary,
       });
-      if (saved.success) setSavedId(saved.data.id);
-      else console.warn('保存历史失败:', saved?.error);
-    } catch (e) {
-      console.warn('保存历史异常:', e);
+      if (saved.success) {
+        setSavedId(saved.data.id);
+        setSaveErr('');
+      } else {
+        setSaveErr(saved?.error || '未知错误');
+      }
+    } catch (e: any) {
+      setSaveErr(e?.message || '保存请求失败');
     }
   }
 
@@ -165,6 +170,7 @@ export default function Home() {
     setErr('');
     setResult('');
     setSavedId(null);
+    setSaveErr('');
     setFinalTime(null);
     if (typeof window !== 'undefined') localStorage.removeItem(LR_KEY); // 开始新推理才清掉旧结果
     if (!me) return setErr('请先输入你的秘钥');
@@ -428,6 +434,11 @@ export default function Home() {
               {savedId && (
                 <p className="mt-3 text-xs text-green-400">
                   已保存到历史库 · <a className="underline" href="/history">查看</a>
+                </p>
+              )}
+              {saveErr && (
+                <p className="mt-3 text-xs text-red-400">
+                  ⚠ 结果已生成,但保存到历史库失败:{saveErr}(分镜仍可正常复制使用)
                 </p>
               )}
               {/* 反推后直接在此生成变体(融合提示词工坊) */}
