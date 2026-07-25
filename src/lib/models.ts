@@ -21,8 +21,13 @@ export const REVERSE_MODELS: ReverseModel[] = [
     vision: true,
     note: '默认推荐,反推细节最丰富',
   },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro（强·多模态）', vision: true },
-  { id: 'gpt-5.5', label: 'GPT-5.5（多模态）', vision: true },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro（强·多模态·最稳）', vision: true },
+  {
+    id: 'gpt-5.5',
+    label: 'GPT-5.5（多模态·不稳时自动回退）',
+    vision: true,
+    note: '该模型在中转上偶发空输出/超时,遇到会自动改用 Gemini 2.5 Pro 完成',
+  },
 ];
 
 export const DEFAULT_MODEL = REVERSE_MODELS[0].id;

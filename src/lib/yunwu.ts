@@ -40,7 +40,7 @@ export async function chat(opts: {
     userContent.push({ type: 'image_url', image_url: { url: img } });
   }
 
-  const res = await client.chat.completions.create({
+  const body = {
     model: opts.model,
     temperature: opts.temperature ?? 0.4,
     max_tokens: opts.maxTokens ?? 8000,
@@ -48,22 +48,77 @@ export async function chat(opts: {
       { role: 'system', content: opts.system },
       { role: 'user', content: userContent },
     ],
-  });
-  const choice = res.choices?.[0];
-  const content = choice?.message?.content?.trim() || '';
-  if (!content) {
-    // 空正文一定是失败(常见:内容安全过滤 / 推理占满额度截断)。给出可操作的报错,
-    // 而不是把空字符串当成功往下传,导致「反推成功却是空白结果」。
-    const fr = choice?.finish_reason;
-    if (fr === 'content_filter')
-      throw new Error(
-        '该模型触发了内容安全过滤(文案含暴力/死亡等敏感情节),未能输出。建议换用 gemini-2.5-pro 或 gpt-5.5 重试,或调整文案措辞后再试。',
-      );
-    if (fr === 'length')
-      throw new Error('模型输出被长度限制截断且未产出正文(思考占满了额度)。请减少分段数量或更换反推模型后重试。');
-    throw new Error(`模型返回了空内容(finish_reason=${fr || 'unknown'})。请重试或更换反推模型。`);
+  } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
+
+  // gpt-5.5 / gemini 3.1 等「重思考」模型生成很慢,给足 5 分钟;超时/中转繁忙再重试一次。
+  const PER_CALL_TIMEOUT = Number(process.env.CHAT_TIMEOUT_MS || 300000);
+  const MAX_ATTEMPTS = 2;
+  let lastErr: any;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await client.chat.completions.create(body, {
+        timeout: PER_CALL_TIMEOUT,
+        maxRetries: 0,
+      });
+      const choice = res.choices?.[0];
+      const content = choice?.message?.content?.trim() || '';
+      if (!content) {
+        // 空正文一定是失败(常见:内容安全过滤 / 推理占满额度 / 该模型在中转上不产出正文如 gpt-5.5)。
+        // 打上 emptyOutput 标记,供上层 chatWithFallback 自动改用可靠模型重试。
+        const fr = choice?.finish_reason;
+        let m: string;
+        if (fr === 'content_filter')
+          m = '该模型触发了内容安全过滤(文案含暴力/死亡等敏感情节),未能输出。建议换用 gemini-2.5-pro 重试,或调整文案措辞后再试。';
+        else if (fr === 'length')
+          m = '模型输出被长度限制截断且未产出正文(思考占满了额度)。请减少分段数量或更换反推模型后重试。';
+        else m = `模型「${opts.model}」返回了空内容(finish_reason=${fr || 'unknown'})。请重试或更换反推模型。`;
+        const err: any = new Error(m);
+        err.emptyOutput = true;
+        throw err;
+      }
+      return content;
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message || e);
+      const isTimeout = /请求超时|超时|timed?\s*out|timeout|ETIMEDOUT/i.test(msg);
+      const retryable = isTimeout || /负载|饱和|overload|rate|limit|429|500|502|503|504|ECONNRESET|socket/i.test(msg);
+      // 内容过滤/空内容等业务错误不含上述关键词 → 不重试,直接抛
+      if (attempt < MAX_ATTEMPTS && retryable) continue;
+      if (isTimeout)
+        throw new Error(
+          `模型「${opts.model}」响应超时(它较慢或中转繁忙)。请重试;若仍超时,建议改用 gemini-2.5-pro(更快更稳)。`,
+        );
+      throw e;
+    }
   }
-  return content;
+  throw lastErr;
+}
+
+/** 反推兜底模型:实测在 yunwu 上稳定产出、速度快。gpt-5.5/gemini-3.1 空输出或超时时自动改用它。 */
+export const FALLBACK_MODEL = 'gemini-2.5-pro';
+
+/**
+ * 反推专用 chat:选中的模型若「空输出 / 超时 / 中转繁忙」,自动改用可靠兜底模型重试一次,
+ * 避免用户选了个别不稳定的模型(如 gpt-5.5)就直接失败、拿不到结果。
+ */
+export async function chatWithFallback(
+  opts: Parameters<typeof chat>[0],
+): Promise<{ text: string; usedModel: string; fellBack: boolean }> {
+  try {
+    const text = await chat(opts);
+    return { text, usedModel: opts.model, fellBack: false };
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    const worthFallback =
+      e?.emptyOutput ||
+      /空内容|内容安全过滤|长度限制|超时|timed?\s*out|timeout|负载|饱和|overload|429|5\d\d/i.test(msg);
+    if (worthFallback && opts.model !== FALLBACK_MODEL) {
+      console.warn(`[chat] 模型 ${opts.model} 失败(${msg.slice(0, 60)}),自动改用 ${FALLBACK_MODEL} 重试`);
+      const text = await chat({ ...opts, model: FALLBACK_MODEL });
+      return { text, usedModel: FALLBACK_MODEL, fellBack: true };
+    }
+    throw e;
+  }
 }
 
 /**

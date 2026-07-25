@@ -1,12 +1,13 @@
 name: 打包 Windows 客户端
 
+# 支持:①在 GitHub 网页点按钮手动触发;②推送 v 开头的标签时触发
 on:
   workflow_dispatch:
   push:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: write   # 允许把安装包发布到 Releases(自动更新用)
 
 jobs:
   build-windows:
@@ -23,12 +24,12 @@ jobs:
       - name: 安装依赖
         run: npm install
 
-      - name: 打包 exe 并发布到 Releases
+      - name: 打包 exe 并发布到 Releases(自动更新用)
         run: npm run dist:publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 上传安装包
+      - name: 上传安装包(在本次运行页面下载)
         uses: actions/upload-artifact@v4
         with:
           name: Seedance2.0反推-Windows安装包

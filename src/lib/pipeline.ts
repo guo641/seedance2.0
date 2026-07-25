@@ -1,4 +1,4 @@
-import { chat } from './yunwu';
+import { chatWithFallback } from './yunwu';
 import { transcribeAudio } from './asr';
 import {
   extractFramesTimed,
@@ -61,7 +61,7 @@ export async function reverseStoryboard(opts: {
     if (!opts.subtitle?.trim())
       throw new Error('该模型为纯文本或无视频输入,必须提供字幕/文案才能反推');
     opts.onProgress?.('文本反推中...');
-    const storyboard = await chat({
+    const { text: storyboard } = await chatWithFallback({
       model: model.id,
       system: reverseSystemPrompt(seg, opts.style),
       user: reverseFromSubtitleUserPrompt(opts.subtitle, seg),
@@ -145,7 +145,7 @@ export async function reverseStoryboard(opts: {
       ? `分镜反推中(${frames.length}帧·读画面字幕 · ${model.label})...`
       : `分镜反推中(${frames.length}帧,其中${dialogueFrameCount}帧对准台词时刻 · ${model.label})...`,
   );
-  const storyboard = await chat({
+  const { text: storyboard } = await chatWithFallback({
     model: model.id,
     system: reverseSystemPrompt(seg, opts.style),
     user: reverseUserPrompt({
@@ -193,7 +193,7 @@ export async function reverseFromCommentary(opts: {
 }): Promise<{ storyboard: string }> {
   const seg = opts.segmentSeconds || SEGMENT_SECONDS;
   opts.onProgress?.('解析解说文案、反推画面中...');
-  const storyboard = await chat({
+  const { text: storyboard } = await chatWithFallback({
     model: getModel(opts.modelId).id,
     system: commentarySystemPrompt(seg, opts.style),
     user: commentaryUserPrompt(opts.script, seg, opts.totalSeconds),
@@ -211,12 +211,14 @@ export async function adjustDuration(
 ): Promise<string> {
   const segSeconds = seg && seg > 0 ? seg : detectSegmentSeconds(storyboard);
   const instruction = buildAdjustInstruction(key, segSeconds);
-  return chat({
-    model: getModel(modelId).id,
-    system: adjustSystemPrompt(segSeconds),
-    user: `【原始分镜(每段 ${segSeconds} 秒)】\n${storyboard}\n\n【改写指令】\n${instruction}`,
-    maxTokens: MAX_OUT,
-  });
+  return (
+    await chatWithFallback({
+      model: getModel(modelId).id,
+      system: adjustSystemPrompt(segSeconds),
+      user: `【原始分镜(每段 ${segSeconds} 秒)】\n${storyboard}\n\n【改写指令】\n${instruction}`,
+      maxTokens: MAX_OUT,
+    })
+  ).text;
 }
 
 /** 生成变体。段长沿用源分镜(自动识别),除非改写维度要求改时长。 */
@@ -227,10 +229,12 @@ export async function generateVariant(
   seg?: number,
 ): Promise<string> {
   const segSeconds = seg && seg > 0 ? seg : detectSegmentSeconds(source);
-  return chat({
-    model: getModel(modelId).id,
-    system: variantSystemPrompt(segSeconds),
-    user: variantUserPrompt(source, dims),
-    maxTokens: MAX_OUT,
-  });
+  return (
+    await chatWithFallback({
+      model: getModel(modelId).id,
+      system: variantSystemPrompt(segSeconds),
+      user: variantUserPrompt(source, dims),
+      maxTokens: MAX_OUT,
+    })
+  ).text;
 }
