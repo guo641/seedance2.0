@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type DragEvent } from 'react';
 import Header, { useMe } from '@/components/Header';
 import { api, postJSON, pollTask } from '@/lib/client';
 
@@ -13,6 +13,7 @@ const PLATFORMS = [
 ];
 
 type Item = {
+  id: string;
   link: string;
   status: 'idle' | 'parsing' | 'ok' | 'fail';
   error?: string;
@@ -24,6 +25,12 @@ type Item = {
   analysisId?: number;
   sub?: { status: 'running' | 'done' | 'fail'; msg?: string; srt?: string; text?: string };
 };
+
+function makeItemId() {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 /** 触发文本下载 */
 function downloadText(name: string, ext: string, content: string) {
@@ -54,6 +61,7 @@ export default function DownloadPage() {
   const [models, setModels] = useState<any[]>([]);
   const [model, setModel] = useState('');
   const [seg, setSeg] = useState(12);
+  const [dragActive, setDragActive] = useState(false);
 
   useEffect(() => {
     api('/api/models').then((r) => {
@@ -66,13 +74,15 @@ export default function DownloadPage() {
 
   const update = (i: number, patch: Partial<Item>) =>
     setItems((arr) => arr.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
+  const updateById = (id: string, patch: Partial<Item>) =>
+    setItems((arr) => arr.map((it) => (it.id === id ? { ...it, ...patch } : it)));
 
   async function parseAll() {
     setErr('');
     const links = extractLinks(text);
     if (!links.length) return setErr('请粘贴至少一条视频链接(每行一条)');
     if (!me) return setErr('请先登录');
-    const init: Item[] = links.map((link) => ({ link, status: 'parsing', rev: 'idle' }));
+    const init: Item[] = links.map((link) => ({ id: makeItemId(), link, status: 'parsing', rev: 'idle' }));
     setItems(init);
     setBusy(true);
     // 并发解析(限 4 条同时)
@@ -150,28 +160,41 @@ export default function DownloadPage() {
   }
 
   // 提取字幕(单条):免费必剪 → SRT + TXT
+  async function extractSubById(id: string, videoUrl: string) {
+    updateById(id, { sub: { status: 'running', msg: '转写中...' } });
+    try {
+      const trig = await postJSON('/api/extract-subtitle', { video_url: videoUrl });
+      if (!trig.success) throw new Error(trig.error || '触发失败');
+      const done = await pollTask((id) => `/api/extract-subtitle/status?taskId=${id}`, trig.taskId, {
+        onTick: (x) => x.progress && updateById(id, { sub: { status: 'running', msg: x.progress } }),
+      });
+      updateById(id, { sub: { status: 'done', srt: done.srt, text: done.text } });
+    } catch (e: any) {
+      updateById(id, { sub: { status: 'fail', msg: e?.message || '提取失败' } });
+    }
+  }
+
   async function extractSub(i: number) {
     const it = items[i];
     if (!it.videoUrl) return;
-    update(i, { sub: { status: 'running', msg: '转写中...' } });
-    try {
-      const trig = await postJSON('/api/extract-subtitle', { video_url: it.videoUrl });
-      if (!trig.success) throw new Error(trig.error || '触发失败');
-      const done = await pollTask((id) => `/api/extract-subtitle/status?taskId=${id}`, trig.taskId, {
-        onTick: (x) => x.progress && update(i, { sub: { status: 'running', msg: x.progress } }),
-      });
-      update(i, { sub: { status: 'done', srt: done.srt, text: done.text } });
-    } catch (e: any) {
-      update(i, { sub: { status: 'fail', msg: e?.message || '提取失败' } });
-    }
+    await extractSubById(it.id, it.videoUrl);
   }
 
   // 上传本地视频 → 免下载,直接提字幕(和 AsrTools 一样快)
   async function uploadAndExtract(files: FileList | null) {
     if (!files || !files.length) return;
     if (!me) return setErr('请先登录');
+    setErr('');
     for (const f of Array.from(files)) {
-      const item: Item = { link: f.name, status: 'ok', rev: 'idle', title: f.name.replace(/\.[^.]+$/, '') };
+      const id = makeItemId();
+      const item: Item = {
+        id,
+        link: f.name,
+        status: 'parsing',
+        rev: 'idle',
+        title: f.name.replace(/\.[^.]+$/, ''),
+        sub: { status: 'running', msg: '上传中...' },
+      };
       setItems((arr) => [item, ...arr]);
       // 上传
       try {
@@ -179,14 +202,21 @@ export default function DownloadPage() {
         fd.append('file', f);
         const up = await api('/api/upload', { method: 'POST', body: fd });
         if (!up.success) throw new Error(up.error || '上传失败');
+        const videoUrl = up.data.videoUrl;
         // 直接提字幕(video_url = 本地media,免下载)
-        setItems((arr) => arr.map((it) => (it === item ? { ...it, videoUrl: up.data.videoUrl } : it)));
+        updateById(id, { status: 'ok', videoUrl, sub: { status: 'running', msg: '转写中...' } });
+        await extractSubById(id, videoUrl);
       } catch (e: any) {
-        setItems((arr) => arr.map((it) => (it === item ? { ...it, status: 'fail', error: e?.message } : it)));
+        updateById(id, { status: 'fail', error: e?.message || '上传失败', sub: { status: 'fail', msg: e?.message || '上传失败' } });
       }
     }
-    // 触发所有新上传项提字幕
-    setTimeout(() => extractAllSub(), 100);
+  }
+
+  function onDropVideo(e: DragEvent<HTMLElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    uploadAndExtract(e.dataTransfer.files);
   }
 
   // 批量提取字幕(逐条串行)
@@ -257,17 +287,40 @@ export default function DownloadPage() {
             <button className="btn-primary flex-1" onClick={parseAll} disabled={busy || !me}>
               {busy ? '解析中...' : me ? '批量解析' : '请先登录'}
             </button>
-            <label className="btn-ghost cursor-pointer whitespace-nowrap" title="已有视频文件?上传直接提字幕,免下载最快">
-              上传视频提字幕
-              <input
-                type="file"
-                accept="video/*,.mp4,.mov,.webm,.mkv"
-                multiple
-                className="hidden"
-                onChange={(e) => uploadAndExtract(e.target.files)}
-              />
-            </label>
           </div>
+
+          <label
+            className={`block border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-colors ${
+              dragActive ? 'border-accent bg-accent/10' : 'border-line hover:border-accent bg-ink/40'
+            }`}
+            title="已有视频文件?拖拽或点击上传,上传后自动提取字幕"
+            onDragEnter={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              setDragActive(false);
+            }}
+            onDrop={onDropVideo}
+          >
+            <input
+              type="file"
+              accept="video/*,.mp4,.mov,.webm,.mkv,.m4v"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                uploadAndExtract(e.target.files);
+                e.currentTarget.value = '';
+              }}
+            />
+            <div className="text-sm font-medium text-gray-200">拖拽视频到这里，自动上传并提取字幕</div>
+            <div className="text-xs text-gray-500 mt-1">也可以点击选择文件，支持 mp4/mov/webm/mkv/m4v，单个最大 200MB</div>
+          </label>
           {err && <p className="text-sm text-red-400">{err}</p>}
 
           {items.length > 0 && (
@@ -300,7 +353,7 @@ export default function DownloadPage() {
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium line-clamp-2">
-                        {it.status === 'parsing' ? '解析中...' : it.title || (it.status === 'fail' ? '解析失败' : '未命名')}
+                        {it.status === 'parsing' ? (it.link.startsWith('http') ? '解析中...' : '上传中...') : it.title || (it.status === 'fail' ? '解析失败' : '未命名')}
                       </div>
                       <div className="text-xs text-gray-500 truncate">{it.link}</div>
                       {it.status === 'fail' && <div className="text-xs text-red-400">{it.error}</div>}

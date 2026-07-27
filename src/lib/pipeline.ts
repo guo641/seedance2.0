@@ -30,6 +30,12 @@ import fs from 'node:fs';
 // 输出 token 上限(防止多段分镜被截断)
 const MAX_OUT = Number(process.env.MAX_OUTPUT_TOKENS || 16000);
 
+function assertLocalVideoExists(file: string) {
+  if (!/^https?:\/\//.test(file) && !fs.existsSync(file)) {
+    throw new Error('本地上传视频文件不存在,请重新上传后再提取字幕');
+  }
+}
+
 /** 从本地或远程视频生成字幕(SRT 文本) */
 export async function makeSubtitle(videoPathOrUrl: string): Promise<string> {
   const local = /^https?:\/\//.test(videoPathOrUrl)
@@ -171,6 +177,7 @@ export async function extractSubtitle(
 ): Promise<{ srt: string; text: string; cues: { start: number; end: number; text: string }[] }> {
   onProgress?.('下载视频音轨...');
   const local = /^https?:\/\//.test(videoUrl) ? await downloadTo(videoUrl) : videoUrl;
+  assertLocalVideoExists(local);
   const audio = await extractAudio(local);
   try {
     const r = await transcribeAudio(audio, onProgress);

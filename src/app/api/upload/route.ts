@@ -1,10 +1,8 @@
 import { requireKey } from '@/lib/api';
+import { ensureUploadDir, uploadPath } from '@/lib/media';
 import fs from 'node:fs';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
-
-const UP_DIR = path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'uploads');
-if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
 
 const MAX_BYTES = 200 * 1024 * 1024; // 200MB,与原程序一致
 const OK_EXT = ['.mp4', '.mov', '.webm', '.mkv', '.m4v'];
@@ -36,7 +34,8 @@ export async function POST(req: Request) {
   const id = nanoid(12);
   const name = `${id}${ext}`;
   const buf = Buffer.from(await file.arrayBuffer());
-  fs.writeFileSync(path.join(UP_DIR, name), buf);
+  ensureUploadDir();
+  fs.writeFileSync(uploadPath(name), buf);
 
   return Response.json({
     success: true,
