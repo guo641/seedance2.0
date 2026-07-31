@@ -1,6 +1,7 @@
 /**
  * 台词转写编排:按 ASR_PROVIDERS 顺序尝试多个引擎。
- * 默认 bcut(必剪·免费·带时间戳) → yunwu(whisper·付费·备用)。
+ * 默认 bcut(必剪·免费·带时间戳)单独跑 —— 当前中转(巧匠)不支持 ASR,只保留必剪。
+ * 如需加备用引擎,在 .env 设 ASR_PROVIDERS=bcut,yunwu 即可恢复。
  */
 import { bcutTranscribe } from './bcutasr';
 import { transcribe as yunwuTranscribe } from './yunwu';
@@ -16,7 +17,7 @@ export async function transcribeAudio(
   audioPath: string,
   onProgress?: (msg: string) => void,
 ): Promise<AsrResult> {
-  const order = (process.env.ASR_PROVIDERS || 'bcut,yunwu')
+  const order = (process.env.ASR_PROVIDERS || 'bcut')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);

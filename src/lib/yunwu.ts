@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import { getKeyCtx } from './keystore';
 
 /**
- * yunwu.ai 中转客户端(OpenAI 兼容)。
+ * 巧匠中转 (https://api.lk888.ai/api/v1) OpenAI 兼容客户端。
+ * 旧名 yunwu 是历史遗留,实际指代中转站本身;调用方式完全一致。
  * BYOK:优先用当前请求上下文里的用户 key;可传 explicitKey 覆盖(验证/测速用);再兜底 env。
  */
 export function yunwu(explicitKey?: string, explicitBase?: string) {
@@ -13,7 +14,7 @@ export function yunwu(explicitKey?: string, explicitBase?: string) {
   if (!apiKey) throw new Error('未提供秘钥,请先在秘钥页输入你的秘钥');
   return new OpenAI({
     apiKey,
-    baseURL: explicitBase || ctx?.baseUrl || process.env.YUNWU_BASE_URL || 'https://yunwu.ai/v1',
+    baseURL: explicitBase || ctx?.baseUrl || process.env.YUNWU_BASE_URL || 'https://api.lk888.ai/api/v1',
     maxRetries: 0,
     timeout: 180000,
   });
@@ -120,8 +121,8 @@ export async function chat(opts: {
   throw lastErr;
 }
 
-/** 反推兜底模型:实测在 yunwu 上稳定产出、速度快。gpt-5.5/gemini-3.1 空输出或超时时自动改用它。 */
-export const FALLBACK_MODEL = 'gemini-2.5-pro';
+/** 反推兜底模型:实测在巧匠中转上稳定产出、速度快。gpt-5.5/gemini-3.1 空输出或超时时自动改用它。 */
+export const FALLBACK_MODEL = 'gemini-3.1-pro-preview';
 
 /**
  * 反推专用 chat:选中的模型若「空输出 / 超时 / 中转繁忙」,自动改用可靠兜底模型重试一次,
