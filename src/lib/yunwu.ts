@@ -80,14 +80,40 @@ export async function chat(opts: {
     } catch (e: any) {
       lastErr = e;
       const msg = String(e?.message || e);
-      const isTimeout = /请求超时|超时|timed?\s*out|timeout|ETIMEDOUT/i.test(msg);
-      const retryable = isTimeout || /负载|饱和|overload|rate|limit|429|500|502|503|504|ECONNRESET|socket/i.test(msg);
-      // 内容过滤/空内容等业务错误不含上述关键词 → 不重试,直接抛
+
+      // OpenAI SDK 4.x 把所有底层网络错误一律包成 "Connection error." —— 解开看真实根因。
+      let realMsg = msg;
+      let realCause = '';
+      if (msg.trim() === 'Connection error.' || /connection error/i.test(msg)) {
+        // 优先看 SDK 自带的 cause(SDK 内部会附 OpenAIError)
+        const cause = e?.cause || e?.error?.cause;
+        if (cause) {
+          realCause = String(cause?.message || cause);
+          realMsg = realCause || msg;
+        } else {
+          realMsg = msg + ' (无 cause,可能 SDK 未加载或 Node 缺少全局 fetch)';
+        }
+      }
+
+      const isTimeout = /请求超时|超时|timed?\s*out|timeout|ETIMEDOUT|ETIMEOUT/i.test(realMsg);
+      const isNetErr = /fetch failed|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|ENETUNREACH|EAI_AGAIN|socket hang up|TLS|handshake|certificate/i.test(realMsg);
+      const retryable = isTimeout || /负载|饱和|overload|rate|limit|429|500|502|503|504|ECONNRESET|socket/i.test(realMsg);
+
       if (attempt < MAX_ATTEMPTS && retryable) continue;
+
       if (isTimeout)
         throw new Error(
           `模型「${opts.model}」响应超时(它较慢或中转繁忙)。请重试;若仍超时,建议改用 gemini-2.5-pro(更快更稳)。`,
         );
+
+      // 网络层错误:把真实原因带出去,方便桌面端/网页端定位
+      if (isNetErr) {
+        const err: any = new Error(`网络请求失败(${realMsg})。请检查:①本机能否打开 https://yunwu.ai ②是否开了代理/VPN/Clash TUN 模式(可能劫持 Node 进程的 TLS 握手)③防火墙是否拦截`);
+        err.netError = true;
+        err.realCause = realCause;
+        throw err;
+      }
+
       throw e;
     }
   }
