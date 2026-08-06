@@ -89,8 +89,13 @@ export async function resolveDouyin(
     const errors: string[] = [];
     for (const base of bases) {
       const r = await callOneProvider(base, '/api/dy', share);
+      if (r.ok) {
+        // 成功:走拼出的 URL(成功变体没有 tried 字段,不能取 r.tried)
+        tried.push(`${base}/api/dy`);
+        return { ok: true, videoUrl: r.videoUrl, title: r.title, cover: r.cover, tried };
+      }
+      // 失败:这里 TS 已 narrow 到 {ok:false} 变体,可以安全取 r.tried
       tried.push(r.tried);
-      if (r.ok) return { ok: true, videoUrl: r.videoUrl, title: r.title, cover: r.cover, tried };
       errors.push(`${r.tried}: ${r.error}`);
     }
     return {
@@ -102,7 +107,8 @@ export async function resolveDouyin(
 
   // 非抖音平台:用对应 provider 单源
   const p = DEFAULT_PARSERS[platform] || DEFAULT_PARSERS.douyin;
+  const url = `${p.base}${p.endpoint}`;
   const r = await callOneProvider(p.base, p.endpoint, share);
-  if (r.ok) return { ok: true, videoUrl: r.videoUrl, title: r.title, cover: r.cover, tried: [r.tried] };
-  return { ok: false, error: `解析失败: ${r.error}`, tried: [r.tried] };
+  if (r.ok) return { ok: true, videoUrl: r.videoUrl, title: r.title, cover: r.cover, tried: [url] };
+  return { ok: false, error: `解析失败: ${r.error}`, tried: [url] };
 }
